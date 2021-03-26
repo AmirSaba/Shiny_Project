@@ -13,6 +13,8 @@ library(caret)
 library(caTools)
 library(randomForest)
 library(MLmetrics)
+library(plyr)
+library(corrplot)
 
 # UI 
 ui<-(fluidPage(
@@ -52,13 +54,86 @@ ui<-(fluidPage(
           #Panel de la presentation des donnees
           tabPanel("Presentation des donnees",
                    tabsetPanel(tabPanel("Table", h1("Table"),DT::dataTableOutput("view_spr")),
-                               tabPanel("Analyse Univariee", h1("Analyse univariee"),verbatimTextOutput("summary")),
-                               tabPanel("Analyse Bivariee", h1("Analyse Bivariee"),plotOutput("plotknn"))
+                               tabPanel("Analyse Univariee", h1("Analyse univariee"),
+                                        h3("Variables Quantitatives"),
+                                        selectInput(
+                                          "var_quant_univ", "Veuillez selectionner la variable de votre choix",
+                                          c('Age','DistanceFromHome','MonthlyIncome','NumCompaniesWorked',
+                                            'PercentSalaryHike','StockOptionLevel','TotalWorkingYears',
+                                            'TrainingTimesLastYear','YearsAtCompany','YearsSinceLastPromotion',
+                                            'YearsWithCurrManager')
+                                        ),
+                                        checkboxInput("univ_mode_densite", "Densité", value = FALSE, width = NULL),
+                                        fluidRow(column(5,plotOutput("univ_hist")),column(5,plotOutput("univ_boxplot"))),
+                                        fluidRow(column(5,plotOutput("univ_normplot")),column(5,plotOutput("univ_22"))),
+                                        
+                                        h3("Variables Qualitatives"),
+                                        selectInput(
+                                          "var_qual_univ", "Veuillez selectionner la variable de votre choix",
+                                          c("JobInvolvement", "PerformanceRating", "EnvironmentSatisfaction", 
+                                            "JobSatisfaction" ,"WorkLifeBalance", "Attrition", "BusinessTravel", 
+                                            "Department", "Education", "EducationField", "Gender", "JobLevel", 
+                                            "JobRole","MaritalStatus")
+                                        ),
+                                        checkboxInput("univ_mode_pourcent", "Pourcentage", value = FALSE, width = NULL),
+                                        
+                                        fluidRow(column(5,plotOutput("univ_bar")),column(5,plotOutput("univ_pie"))),
+                                        
+                               ),
+                               tabPanel("Analyse Bivariee", h1("Analyse Bivariee"),
+                                        h3("Analyse Générale"),
+                                        fluidRow(column(5,plotOutput("biv_corrplot")),column(5,plotOutput("biv"))),
+                                        
+                                        h3("Analyses Cyblées"),
+                                        fluidRow(column(5,
+                                                    selectInput(
+                                                      "biv_v1", "Veuillez selectionner la variable de votre choix",
+                                                      selected="Age",
+                                                      list(
+                                                        `Quantitative`=c('Age','DistanceFromHome','MonthlyIncome','NumCompaniesWorked',
+                                                                         'PercentSalaryHike','StockOptionLevel','TotalWorkingYears',
+                                                                         'TrainingTimesLastYear','YearsAtCompany','YearsSinceLastPromotion',
+                                                                         'YearsWithCurrManager')
+                                                        ,
+                                                        `Qualitative`= c("JobInvolvement", "PerformanceRating", "EnvironmentSatisfaction", 
+                                                                         "JobSatisfaction" ,"WorkLifeBalance", "Attrition", "BusinessTravel", 
+                                                                         "Department", "Education", "EducationField", "Gender", "JobLevel", 
+                                                                         "JobRole","MaritalStatus")
+                                                      )
+                                                    ) 
+                                                 ),
+                                                 column(5,
+                                                    selectInput(
+                                                      "biv_v2", "Veuillez selectionner la variable de votre choix",
+                                                      selected="Attrition",
+                                                      list(
+                                                        `Quantitative`=c('Age','DistanceFromHome','MonthlyIncome','NumCompaniesWorked',
+                                                                         'PercentSalaryHike','StockOptionLevel','TotalWorkingYears',
+                                                                         'TrainingTimesLastYear','YearsAtCompany','YearsSinceLastPromotion',
+                                                                         'YearsWithCurrManager')
+                                                        ,
+                                                        `Qualitative`= c("JobInvolvement", "PerformanceRating", "EnvironmentSatisfaction", 
+                                                                         "JobSatisfaction" ,"WorkLifeBalance", "Attrition", "BusinessTravel", 
+                                                                         "Department", "Education", "EducationField", "Gender", "JobLevel", 
+                                                                         "JobRole","MaritalStatus")
+                                                      )
+                                                    )              
+                                                 )
+                                        ),
+                                        fluidRow(column(5,plotOutput("biv_d1")),column(5,plotOutput("biv_d2"))),
+                                        fluidRow(column(5,plotOutput("biv_d3")),column(5,plotOutput("biv_d4")))
+                                        
+
+                               )
                    )),
           #Panel de l'exploration des variables
           tabPanel("Exploration des variables",
                    tabsetPanel(tabPanel("Table", h1("Table"),DT::dataTableOutput("n")),
-                               tabPanel("Analyse Univariee", h1("Analyse univariee"),verbatimTextOutput("r")),
+                               tabPanel("Analyse Univariee", h1("Analyse univariee"),
+                                        
+
+                               ),
+                               
                                tabPanel("Analyse Bivariee", h1("Analyse Bivariee"),plotOutput("o"))
                    )),
           #Panel de classification
@@ -125,10 +200,6 @@ server <- function(input, output){
   
   # Commande pour le chargement de données dans 'output'
   output$Tableau <- renderTable({tabStats()})
-  
-  
-
-  
 
   
   #Affichage du dataset spiral
@@ -138,28 +209,50 @@ server <- function(input, output){
   
   
   pretraitement <- reactive({
-    dataset = datasetInput()
+    empattr = datasetInput()
     
-    sum(is.na(dataset))
-    dataset$Education = factor(dataset$Education)
-    dataset$EnvironmentSatisfaction = factor(dataset$EnvironmentSatisfaction)
-    dataset$JobInvolvement = factor(dataset$JobInvolvement)
-    dataset$JobSatisfaction = factor(dataset$JobSatisfaction)
-    dataset$PerformanceRating = factor(dataset$PerformanceRating)
-    dataset$EnvironmentSatisfaction = factor(dataset$EnvironmentSatisfaction)
-    dataset$WorkLifeBalance = factor(dataset$WorkLifeBalance)
+    empattr$Education = factor(empattr$Education)
+    empattr$Education = revalue(empattr$Education, c("1"="Below College", "2"="College", "3"="Bachelor", "4"="Master", "5"="Doctor"))
     
-    dataset$Attrition = factor(dataset$Attrition)
-    dataset$BusinessTravel = factor(dataset$BusinessTravel)
-    dataset$Department = factor(dataset$Department)
-    dataset$EducationField = factor(dataset$EducationField)
-    dataset$Gender = factor(dataset$Gender)
-    dataset$JobRole = factor(dataset$JobRole)
-    dataset$JobLevel = factor(dataset$JobLevel)
-    dataset=na.omit(dataset)
-    dataset$EmployeeNumber=dataset$Over18=dataset$EmployeeCount=dataset$StandardHours = NULL
-    dataset$MaritalStatus=dataset$MonthlyIncome=dataset$PerformanceRating= NULL
-    dataset
+    empattr$EnvironmentSatisfaction = factor(empattr$EnvironmentSatisfaction)
+    empattr$EnvironmentSatisfaction = revalue(empattr$EnvironmentSatisfaction, c("1"="Low", "2"="Medium", "3"="High", "4"="Very High"))
+    
+    empattr$JobInvolvement = factor(empattr$JobInvolvement)
+    empattr$JobInvolvement = revalue(empattr$JobInvolvement, c("1"="Low", "2"="Medium", "3"="High", "4"="Very High"))
+    
+    empattr$JobSatisfaction = factor(empattr$JobSatisfaction)
+    empattr$JobSatisfaction = revalue(empattr$JobSatisfaction, c("1"="Low", "2"="Medium", "3"="High", "4"="Very High"))
+    
+    empattr$PerformanceRating = factor(empattr$PerformanceRating)
+    
+    empattr$JobLevel = factor(empattr$EnvironmentSatisfaction)
+    
+    empattr$WorkLifeBalance = factor(empattr$WorkLifeBalance)
+    empattr$WorkLifeBalance = revalue(empattr$WorkLifeBalance, c("1"="Bad", "2"="Good", "3"="Better", "4"="Best"))
+    
+    empattr$Attrition = factor(empattr$Attrition)
+    empattr$Attrition = revalue(empattr$Attrition, c("No"="No Leave", "Yes"="Leave"))
+    
+    empattr$BusinessTravel = factor(empattr$BusinessTravel)
+    
+    empattr$Department = factor(empattr$Department)
+    
+    empattr$EducationField = factor(empattr$EducationField)
+    
+    empattr$Gender = factor(empattr$Gender)
+    
+    empattr$JobRole = factor(empattr$JobRole)
+    
+    empattr$JobLevel = factor(empattr$JobLevel)
+    
+    empattr$MaritalStatus = factor(empattr$MaritalStatus)
+    
+    empattr$Over18 = factor(empattr$Over18)
+    
+    empattr = empattr[,which(!(names(empattr) %in% c("EmployeeID", "EmployeeCount", "StandardHours", "Over18")))]
+    empattr = na.omit(empattr)
+    
+    empattr
   })
   
   train_Lr <- reactive({
@@ -279,6 +372,221 @@ server <- function(input, output){
     accuracy <- table(as.factor(test$Attrition),predictRF)
     print(sum(diag(accuracy))/sum(accuracy))
   })
+
+############################### GENERAL FUNCTIONS
+  get_quali <- reactive({
+    dataset = pretraitement()
+    is.fact <- sapply(dataset, is.factor)
+    quali = dataset[,is.fact]
+    as.data.frame(quali)
+  })
+  
+  get_quanti <- reactive({
+    dataset = pretraitement()
+    is.fact <- sapply(dataset, is.factor)
+    quanti = dataset[, !is.fact]
+    quanti$Attrition = dataset$Attrition
+    as.data.frame(quanti)
+    
+  })
+  
+  #############################################
+  #############################
+  #############################
+  ######## ONGLET 1 : PRESENTATION DES DONNEES
+  #############################################
+
+############################### ANALYSE UNIVARIEE
+  ################## Fonctions
+  histoUniv = function(df, var, density=FALSE){
+    # Changer la couleur de remplissage par groupe
+    if (density){
+      p = ggplot(data = df, aes(x=df[,var], y=..density..)) +
+        geom_histogram(position="identity", fill=4) +
+        geom_density(alpha=.2) +
+        labs(x=var, y="Densité")
+    }else{
+      p = ggplot(data = df, aes(x=df[,var])) +
+        geom_histogram(position="identity", fill=4) +
+        labs(x=var, y="Count")
+    }
+    
+    # Ajouter les moyennes
+    p+geom_vline(xintercept = mean(df[,var]), linetype="dashed")+
+      ggtitle(paste("Histogramme de ", var, sep=""))
+  }
+
+  
+  barPlotUniv = function(df, var, pourcent=FALSE){
+    if (pourcent){
+      res = ggplot(data=df, aes(x=df[,var], y=..count../sum(..count..), fill=4)) +
+        labs(y="Pourcentage", x = var)
+      
+    }else{
+      res = ggplot(data=df, aes(x=df[,var], fill=4)) +
+        labs(y="Count", x = var)
+    }
+    
+    
+    res + geom_bar(stat="count") +
+        ggtitle(paste("Barplot de ", var, sep="")) + 
+        guides(fill = FALSE) 
+
+  }
+  
+  boxPlotUniv = function(df, var){
+    qplot(y=df[,var], 
+          xlab = var,
+          ylab = var,
+          geom=c("boxplot")) +
+      theme(legend.title=element_blank())
+  }
+  
+  normalityPlot = function(df, var){
+    qqnorm(df[,var], pch = 1, frame = FALSE)
+    qqline(df[,var], col = "steelblue", lwd = 2)
+  }
+  
+  piePlotUniv = function(df, var){
+    cc = table(df[,var])
+    pie(cc, main = paste("Piechart de la variable ", var, sep=""))
+  }
+  
+  ######## Quantitatives
+  output$univ_hist <- renderPlot({
+    histoUniv(get_quanti(), input$var_quant_univ, input$univ_mode_densite)
+  })
+  
+  output$univ_boxplot <- renderPlot({
+    boxPlotUniv(get_quanti(), input$var_quant_univ)
+  })
+  
+  output$univ_normplot <- renderPlot({
+    normalityPlot(get_quanti(), input$var_quant_univ)
+  })
+
+  ####### Qualitatives
+  output$univ_bar <- renderPlot({
+    barPlotUniv(get_quali(), input$var_qual_univ, input$univ_mode_pourcent)
+  })
+  
+  
+  output$univ_pie <- renderPlot({
+    piePlotUniv(get_quali(), input$var_qual_univ)
+  })
+############################## ANALYSE BIVARIEE
+  boxPlotByQuanti = function(df, col1, col2){
+    qplot(x=df[,col2], y = df[,col1], 
+          xlab = col2, ylab = col1,
+          geom=c("boxplot"), fill=df[,col2]) +
+      theme(legend.title=element_blank())
+  }
+  
+  scatterPlot = function(df, col1, col2, coloration){
+    ggplot(df, aes(x=df[,col1], y=df[,col2], shape=df[,coloration], color=df[,coloration])) +
+      geom_point()+
+      labs(x= col1, y=col2, shape=coloration, color=coloration)
+  }
+  
+  histoFctQuali = function(df, vquant, vquali, density=FALSE){
+    if (density){
+      p = ggplot(data = df, aes(x=df[,vquant], y=..density.., fill=df[,vquali])) +
+        geom_histogram(position="identity", alpha=0.3) +
+        geom_density(alpha=.01) +
+        labs(x=vquant, y="Densité", fill=vquali)
+    }else{
+      p = ggplot(data = df, aes(x=df[,vquant],fill=df[,vquali])) +
+        geom_histogram(position="identity", alpha=0.3) +
+        labs(x=vquant, y="Count", fill=vquali)
+    }
+    
+    # Ajouter les moyennes
+    p+geom_vline(xintercept = mean(df[,vquant]), linetype="dashed")+
+      ggtitle(paste("Histogramme de ", vquant, " en fonction de ", vquali, sep=""))
+  }
+
+  barPlotFctQuali = function(df, varqualiPrinc, varqualiSec, stack=TRUE){
+    # Barplots empilés avec plusieurs groupes
+    if (stack){
+      res = ggplot(data=df, aes(x=df[,varqualiPrinc], fill=df[,varqualiSec])) +
+        geom_bar(stat="count", alpha=0.8)
+    }
+    else{
+      res = ggplot(data=df, aes(x=df[,varqualiPrinc], fill=df[,varqualiSec])) +
+        geom_bar(stat="count", position=position_dodge(), alpha = 0.8)
+    }
+    res = res+
+      ggtitle(paste(varqualiPrinc, " selon ", varqualiSec, sep="")) + 
+      labs(y="Count", x = varqualiPrinc, fill=varqualiSec)
+    res
+  }
+  
+  boxPlotByQuanti = function(df, col1, col2){
+    qplot(x=df[,col2], y = df[,col1], 
+          xlab = col2, ylab = col1,
+          geom=c("boxplot"), fill=df[,col2]) +
+      theme(legend.title=element_blank())
+  }
+  
+  output$biv_corrplot <- renderPlot({
+    cor_m = cor(get_quanti()[,-12])
+    corrplot(cor_m, method="color", title = "Matrice des corrélations", order="hclust")
+  })
+  
+  output$biv_d1 <- renderPlot({
+    dataset = data.frame(pretraitement())
+    V1_QUALI = is.factor(dataset[,input$biv_v1])
+    V2_QUALI = is.factor(dataset[,input$biv_v2])
+    res = NULL
+    
+    if (V1_QUALI & V2_QUALI){
+      res = barPlotFctQuali(dataset, input$biv_v1, input$biv_v2, stack=FALSE)
+    }else if (!V1_QUALI & V2_QUALI){
+      res = histoFctQuali(dataset, input$biv_v1, input$biv_v2)
+    }else if (!V2_QUALI & V1_QUALI){
+      res = histoFctQuali(dataset, input$biv_v2, input$biv_v1)
+
+    }else{
+      res = scatterPlot(dataset, input$biv_v1, input$biv_v2, coloration="Attrition")
+    }
+    
+    res
+  })
+  
+  output$biv_d2 <- renderPlot({
+    dataset = data.frame(pretraitement())
+    V1_QUALI = is.factor(dataset[,input$biv_v1])
+    V2_QUALI = is.factor(dataset[,input$biv_v2])
+    res = NULL
+    
+    if (V1_QUALI & V2_QUALI){
+      res = barPlotFctQuali(dataset, input$biv_v1, input$biv_v2, stack=TRUE)
+    }else if (!V1_QUALI & V2_QUALI){
+      res = histoFctQuali(dataset, input$biv_v1, input$biv_v2, density=TRUE)
+    }
+    res
+  })
+  
+  output$biv_d3 <- renderPlot({
+    dataset = data.frame(pretraitement())
+    V1_QUALI = is.factor(dataset[,input$biv_v1])
+    V2_QUALI = is.factor(dataset[,input$biv_v2])
+    res = NULL
+    if (!V1_QUALI & V2_QUALI){
+      res = boxPlotByQuanti(dataset, input$biv_v1, input$biv_v2)
+    }else if (V1_QUALI & !V2_QUALI){
+      res = boxPlotByQuanti(dataset, input$biv_v2, input$biv_v1)
+    }
+    res
+  })
+
+
+  #############################################
+  #############################
+  #############################
+  ######## ONGLET 2 : EXPLORATION DES DONNEES
+  #############################################
+  
 }
 
 
