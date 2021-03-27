@@ -15,12 +15,15 @@ library(randomForest)
 library(MLmetrics)
 library(plyr)
 library(corrplot)
+library(PRROC)
+library(rpart)
+library(rpart.plot)
 
 # UI 
 ui<-(fluidPage(
   
   # Titre
-  titlePanel("TP Analyse Univariee (Travail en plus : Classement)"),
+  titlePanel("Projet Shiny : Employee Attrition"),
   
   # Sidebar 
   sidebarLayout(
@@ -31,12 +34,16 @@ ui<-(fluidPage(
       h3("Choisir la portion d'entrainement"),
       sliderInput("trainsplit", "Portion training:",
                   min = 0.05, max = 0.95,
-                  value = 0.5, step = 0.05
+                  value = 0.7, step = 0.05
       ),
       h3("Choisir les parametres d'entrainement"),
-      checkboxInput("option2", "Over Sampling", value = FALSE, width = NULL),
-      checkboxInput("option3", " Under Sampling", value = FALSE, width = NULL),
-      h2("Realisee par les Etudiants : "),
+      radioButtons("radio",
+                   label="Selectionnez",
+                   choices = list("Over Sampling " = 1, "Under Sampling " = 2,"Sans Sampling" = 3),
+                   selected = 1,
+                   inline = T,
+                   width = "100%"),         
+      h2("Realisé par les Etudiants : "),
       h3("SABA Amir"),
       h3("LADAYCIA Bouteyna"),
       h3("DEBBAGH Abdelkader Nadir")
@@ -82,7 +89,7 @@ ui<-(fluidPage(
                                ),
                                tabPanel("Analyse Bivariee", h1("Analyse Bivariee"),
                                         h3("Analyse Générale"),
-                                        fluidRow(column(5,plotOutput("biv_corrplot")),column(5,plotOutput("biv"))),
+                                        fluidRow(column(10,plotOutput("biv_corrplot"))),
                                         
                                         h3("Analyses Cyblées"),
                                         fluidRow(column(5,
@@ -128,23 +135,43 @@ ui<-(fluidPage(
                    )),
           #Panel de l'exploration des variables
           tabPanel("Exploration des variables",
-                   tabsetPanel(tabPanel("Table", h1("Table"),DT::dataTableOutput("n")),
-                               tabPanel("Analyse Univariee", h1("Analyse univariee"),
-                                        
-
+                   tabsetPanel(tabPanel("Analyse d'Attrition", h1("Analyse d'Attrition"),
+                                  h3("Count"),
+                                  fluidRow(column(5,plotOutput("attr_bar")),column(5,plotOutput("attr_pie"))),
+                                  h3("Corrélation avec Attrition"),
+                                  fluidRow(column(5,tableOutput("attr_corr")),column(5,tableOutput("attr_corr_quanti"))),
+                                  fluidRow(column(5,plotOutput("attr_graphe_best_quali")),column(5,plotOutput("attr_graphe_best_quanti"))),
+                                  h3("Toutes les analyses bivariées avec la variable Attrition sont possible dans l'onglet : Présentation des Données -> Analyse Bivariée")
+                                  
+                                  
                                ),
                                
-                               tabPanel("Analyse Bivariee", h1("Analyse Bivariee"),plotOutput("o"))
+                               tabPanel("Analyse Variable D'Intérêt Age", h1("Analyse Variable D'Intérêt Age"),
+                                  h3("Attrition ou non par Tranche d'âge"),
+                                  fluidRow(column(5,plotOutput("age_bar")),column(5,verbatimTextOutput("age_agger"))),
+                                  h3("Moyennes par tranche d'âge"),
+                                  fluidRow(column(10,DT::dataTableOutput("age_aggr"))),
+
+                                        
+                               ),
+                               
+                               tabPanel("Analyse Variable D'Intérêt YearsAtCompany ", h1("Analyse Variable D'Intérêt YearsAtCompany"),
+                                  h3("Attrition ou non par Tranche d'ancienneté"),
+                                  fluidRow(column(10,plotOutput("comp_bar"))),
+                                  h3("Moyennes par tranche d'ancienneté"),
+                                  fluidRow(column(10,DT::dataTableOutput("comp_aggr"))),
+                                        
+                               )
                    )),
           #Panel de classification
           tabPanel("Classification",
                    tabsetPanel(
                      tabPanel("Random Forest", h1("Random Forest"),fluidRow(column(2, h4("Precison testing: ")), column(2, textOutput("Acc_RF"))),fluidRow(column(2, h4("F1_score :")), column(2, textOutput("f_score_RF"))),plotOutput("Classification_rf")),
-                     tabPanel("Logistic Regression", h1("Logistic Regression"), fluidRow(column(2, h4("Precison testing: ")), column(2, textOutput("Acc_LR"))),fluidRow(column(2, h4("F1_score :")), column(2, textOutput("f_score_LR"))),
-                              plotOutput("classification_lr"))
+                     tabPanel("Logistic Regression", h1("Logistic Regression"), fluidRow(column(2, h4("Precison testing: ")), column(2, textOutput("Acc_LR"))),fluidRow(column(2, h4("F1_score :")), column(2, textOutput("f_score_LR"))),plotOutput("classification_lr")),
+                     tabPanel("Decision Tree", h1("Decision Tree"),fluidRow(column(2, h4("Precison testing: ")), column(2, textOutput("Acc_DT"))),fluidRow(column(2, h4("F1_score :")), column(2, textOutput("f_score_DT"))),fluidRow(column(4, h4("Arbre de décision :")), column(12, plotOutput("DT_tree"))), h4("Courbe PR:"),plotOutput("Classification_DT"))
                    )),
-          
-          tabPanel("Aide", h1("Aide"),verbatimTextOutput("Help"))
+          tabPanel("Application de Surveillance de l'Attrition", h1("Probabilité d'attrition des employés :"),DT::dataTableOutput("Application"))
+          #♣tabPanel("Aide", h1("Aide"),verbatimTextOutput("Help"))
           
         ) 
       ),
@@ -158,55 +185,17 @@ server <- function(input, output){
   
   #Récupération du Dataset selectionné
   datasetInput <- reactive({
-    
-    switch(input$dataset,
-           "Employee Attrition" = read_csv("Employe.csv"))
+    read_csv("Employe.csv")
   })
   
   col <- reactive({
     input$variables
   })
-  # Colonnes du tableau statistique
-  tabStats <- reactive({
-    dataset <- datasetInput()
-    #print(dataset[col()])
-    # Calculer les effectifs et les effectifs cumulés
-    table.tmp <- as.data.frame(table(dataset[col()]))
-    table.tmp <- cbind(table.tmp, cumsum(table.tmp[[2]]))
-    # Calculer les fréquences et les fréquences cumulés
-    table.tmp <- cbind(table.tmp, 
-                       table.tmp[[2]]/nrow(table.tmp)*100,
-                       table.tmp[[3]]/nrow(table.tmp)*100)
-    colnames(table.tmp) <- c("Entry", "Effectifs", "Effectifs Cum.","frequence","frenquence cumules")
-    # Renvoyer le tableau statistique
-    table.tmp
-  })
-  
-  tabStatsTime <- reactive({
-    dataset <- datasetInput()
-    #print(dataset[col()])
-    # Calculer les effectifs et les effectifs cumulés
-    table.tmp <- as.data.frame(table(dataset$time))
-    table.tmp <- cbind(table.tmp, cumsum(table.tmp[[2]]))
-    # Calculer les fréquences et les fréquences cumulés
-    table.tmp <- cbind(table.tmp, 
-                       table.tmp[[2]]/nrow(table.tmp)*100,
-                       table.tmp[[3]]/nrow(table.tmp)*100)
-    colnames(table.tmp) <- c("Entry", "Effectifs", "Effectifs Cum.","frequence","frenquence cumules")
-    # Renvoyer le tableau statistique
-    table.tmp
-  })
-
-  
-  # Commande pour le chargement de données dans 'output'
-  output$Tableau <- renderTable({tabStats()})
-
   
   #Affichage du dataset spiral
   output$view_spr = output$view <- DT::renderDataTable({
     datasetInput()
   })
-  
   
   pretraitement <- reactive({
     empattr = datasetInput()
@@ -255,17 +244,18 @@ server <- function(input, output){
     empattr
   })
   
+
   train_Lr <- reactive({
     set.seed(3000)
-    dataset = pretraitement()
+    dataset = one_hot()
     split=sample.split(dataset$Attrition,SplitRatio = input$trainsplit)
     train=subset(dataset,split==T)
     test=subset(dataset,split==F)
     
-    if (input$option2 == TRUE){
+    if (input$radio == 2){
       downSample(train, train$Attrition)
     }
-    if (input$option3 == TRUE){
+    if (input$radio == 1){
       
       upSample(train, train$Attrition)
       
@@ -276,7 +266,7 @@ server <- function(input, output){
   })
   
   output$Acc_LR <- renderText({
-    dataset=pretraitement()
+    dataset=one_hot()
     split=sample.split(dataset$Attrition,SplitRatio = input$trainsplit)
     train=subset(dataset,split==T)
     test=subset(dataset,split==F)
@@ -287,7 +277,7 @@ server <- function(input, output){
     
   })
   output$f_score_LR <- renderText({
-    dataset=pretraitement()
+    dataset=one_hot()
     split=sample.split(dataset$Attrition,SplitRatio = input$trainsplit)
     train=subset(dataset,split==T)
     test=subset(dataset,split==F)
@@ -298,46 +288,40 @@ server <- function(input, output){
     F1_Score(as.numeric(as.factor(test$Attrition)), pred)*100
   })
   output$classification_lr <- renderPlot({
-    dataset=pretraitement()
+    dataset=one_hot()
     split=sample.split(dataset$Attrition,SplitRatio = input$trainsplit)
     train=subset(dataset,split==T)
     test=subset(dataset,split==F)
     attLog=train_Lr()
     predGlm=predict(attLog,type="response",newdata=test)
-    #fg <- predGlm>.5
-    #bg <- predGlm<.5
-    #pr <- pr.curve(scores.class0 = fg, scores.class1 = bg, curve = T)
-    #plot(pr)
-    x = prediction(predGlm,test$Attrition)
-    perf <- performance(x,"prec","rec")
     
-    plot(perf)
+    scores <- data.frame(predGlm,test$Attrition)
+    pr <- pr.curve(scores.class0=scores[scores$test.Attrition=="Leave",]$predGlm,
+                   scores.class1=scores[scores$test.Attrition=="No Leave",]$predGlm,
+                   curve=T)
     
-    #pred_grid <-glm(as.factor(Attrition)~g[,1:2],data=train,family = binomial)
-    
-    #plot(g$JobInvolvement,g$JobSatisfaction, col = pred_grid, xlab="V1", ylab="V2", pch=19)
-    #points(test$JobInvolvement,test$JobSatisfaction,col=as.numeric(knn.pred) + 6,pch=19)
+    plot(pr)
   })
   
   
   train_rf<- reactive({
-    dataset=pretraitement()
+    dataset=one_hot()
     split=sample.split(dataset$Attrition,SplitRatio = input$trainsplit)
     train=subset(dataset,split==T)
     test=subset(dataset,split==F)
-    if (input$option2 == TRUE){
-      downSample(train, as.factor(train$Attrition))
+    if (input$radio == 2){
+      downSample(train, train$Attrition)
     }
-    if (input$option3 == TRUE){
+    if (input$radio == 1){
       
-      upSample(train, as.factor(train$Attrition))
+      upSample(train,train$Attrition)
       
     }
     randomForestModel=randomForest(as.factor(Attrition)~.,data=train,ntree=100,nodesize=12)
     
   })  
   output$Acc_RF <- renderText({
-    dataset=pretraitement()
+    dataset=one_hot()
     split=sample.split(dataset$Attrition,SplitRatio = input$trainsplit)
     train=subset(dataset,split==T)
     test=subset(dataset,split==F)
@@ -349,7 +333,7 @@ server <- function(input, output){
     
   })
   output$f_score_RF <- renderText({
-    dataset=pretraitement()
+    dataset=one_hot()
     split=sample.split(dataset$Attrition,SplitRatio = input$trainsplit)
     train=subset(dataset,split==T)
     test=subset(dataset,split==F)
@@ -358,7 +342,7 @@ server <- function(input, output){
     F1_Score(as.numeric(as.factor(test$Attrition)), as.numeric(predictRF))*100
   })
   output$Classification_rf <- renderPlot({
-    dataset=pretraitement()
+    dataset=one_hot()
     split=sample.split(dataset$Attrition,SplitRatio = input$trainsplit)
     train=subset(dataset,split==T)
     test=subset(dataset,split==F)
@@ -366,14 +350,157 @@ server <- function(input, output){
     #randomForestModel=train_rf()  
     randomForestModel=train_rf()
     predictRF=predict(randomForestModel,newdata=test,type="response")
-    perf <- performance(prediction(as.numeric(predictRF), test$Attrition),"prec","rec")
-    plot(perf)
-    table(test$Attrition,predictRF)
-    accuracy <- table(as.factor(test$Attrition),predictRF)
-    print(sum(diag(accuracy))/sum(accuracy))
+    
+    scores <- data.frame(predictRF,test$Attrition)
+    pr <- pr.curve(scores.class0=scores[scores$test.Attrition=="Leave",]$predictRF,
+                   scores.class1=scores[scores$test.Attrition=="No Leave",]$predictRF,
+                   curve=T)
+    
+    
+    plot(pr)
+    
+    
+  })
+  
+  
+  
+  
+  
+  
+  train_DT<- reactive({
+    dataset=one_hot()
+    split=sample.split(dataset$Attrition,SplitRatio = input$trainsplit)
+    train=subset(dataset,split==T)
+    test=subset(dataset,split==F)
+    if (input$radio == 2){
+      downSample(train, train$Attrition)
+    }
+    if (input$radio == 1){
+      
+      upSample(train,train$Attrition)
+      
+    }
+    decisionTreeModel= rpart(Attrition~.,data=train,method="class")
+  })  
+  output$Acc_DT <- renderText({
+    dataset=one_hot()
+    split=sample.split(dataset$Attrition,SplitRatio = input$trainsplit)
+    train=subset(dataset,split==T)
+    test=subset(dataset,split==F)
+    decisionTreeModel=train_DT()
+    predDT=predict(decisionTreeModel,newdata = test,type = "class")
+    table(test$Attrition,predDT)
+    accuracy <- table(as.factor(test$Attrition),predDT)
+    sum(diag(accuracy))/sum(accuracy)*100
+    
+  })
+  output$f_score_DT <- renderText({
+    dataset=one_hot()
+    split=sample.split(dataset$Attrition,SplitRatio = input$trainsplit)
+    train=subset(dataset,split==T)
+    test=subset(dataset,split==F)
+    
+    decisionTreeModel=train_DT()
+    predDT=predict(decisionTreeModel,newdata = test,type = "class")
+    F1_Score(as.numeric(as.factor(test$Attrition)), as.numeric(predDT))*100
+  })
+  output$Classification_DT <- renderPlot({
+    dataset=one_hot()
+    split=sample.split(dataset$Attrition,SplitRatio = input$trainsplit)
+    train=subset(dataset,split==T)
+    test=subset(dataset,split==F)
+    
+    
+    decisionTreeModel=train_DT()
+    predDT=predict(decisionTreeModel,newdata = test,type = "class")
+    
+    scores <- data.frame(predDT,test$Attrition)
+    pr <- pr.curve(scores.class0=scores[scores$test.Attrition=="Leave",]$predDT,
+                   scores.class1=scores[scores$test.Attrition=="No Leave",]$predDT,
+                   curve=T)
+    
+    
+    plot(pr)
+    
+    
+  })
+  
+  
+  
+  one_hot <- reactive({
+    dataset<-pretraitement()
+    
+    dataset$EmployeeID=NULL
+    dmy <- dummyVars(~., data = dataset[-7])
+    data_one_cod <- data.frame(predict(dmy, newdata = dataset))
+    data_one_cod$Attrition=dataset$Attrition
+    
+    data_one_cod
+    
+    
+  })
+  
+  option <- reactive({
+    dataset<-pretraitement()
+    
+    dmy <- dummyVars(~., data = dataset[-7])
+    data_one_cod <- data.frame(predict(dmy, newdata = dataset))
+    data_one_cod$Attrition=dataset$Attrition
+    
+    data_one_cod
+  })
+  
+  output$ DT_tree <- renderPlot({
+    dataset=one_hot()
+    split=sample.split(dataset$Attrition,SplitRatio = input$trainsplit)
+    train=subset(dataset,split==T)
+    test=subset(dataset,split==F)
+    
+    
+    decisionTreeModel=train_DT()
+    
+    rpart.plot(decisionTreeModel)
+    
+  })
+  
+  output$Application  = output$Application <- DT::renderDataTable({
+    
+    old_dataset=pretraitement()
+    split=sample.split(old_dataset$Attrition,SplitRatio = 0.5)
+    train2=subset(old_dataset,split==T)
+    test1=subset(old_dataset,split==F)
+    x=test1$EmployeeID
+    
+    print(x)
+    dataset=option()
+    split=sample.split(dataset$Attrition,SplitRatio = 0.5)
+    train=subset(dataset,split==T)
+    test=subset(dataset,split==F)
+    
+    
+    
+    train$EmployeeID=NULL
+    test$EmployeeID=NULL
+    
+    #randomForestModel=train_rf()  
+    attLog=train_Lr()
+    predictLR=predict(attLog,newdata=test,type="response")
+    
+    
+    dataset[,1:65]=NULL
+    dataset$EmployeeID=x
+    dataset$Department=test1$Department
+    dataset$Gender=test1$Gender
+    dataset$JobRole=test1$JobRole
+    dataset$WorkLifeBalance=test1$WorkLifeBalance
+    dataset$Probability_Leave=round(predictLR*100, digits = 0)
+    
+    dataset
+    
   })
 
-############################### GENERAL FUNCTIONS
+
+############################### FONCTIONS GENERALES
   get_quali <- reactive({
     dataset = pretraitement()
     is.fact <- sapply(dataset, is.factor)
@@ -505,19 +632,28 @@ server <- function(input, output){
       ggtitle(paste("Histogramme de ", vquant, " en fonction de ", vquali, sep=""))
   }
 
-  barPlotFctQuali = function(df, varqualiPrinc, varqualiSec, stack=TRUE){
+  barPlotFctQuali = function(df, varqualiPrinc, varqualiSec, stack=TRUE, percent=FALSE){
     # Barplots empilés avec plusieurs groupes
     if (stack){
-      res = ggplot(data=df, aes(x=df[,varqualiPrinc], fill=df[,varqualiSec])) +
-        geom_bar(stat="count", alpha=0.8)
+      if(percent){
+        res = ggplot(data=df, aes(x=df[,varqualiPrinc], fill=df[,varqualiSec])) +
+          geom_bar(stat="count", position=position_fill(), alpha=0.8)
+      }else{
+        res = ggplot(data=df, aes(x=df[,varqualiPrinc], fill=df[,varqualiSec])) +
+          geom_bar(stat="count", alpha=0.8)
+      }
     }
     else{
       res = ggplot(data=df, aes(x=df[,varqualiPrinc], fill=df[,varqualiSec])) +
         geom_bar(stat="count", position=position_dodge(), alpha = 0.8)
     }
     res = res+
-      ggtitle(paste(varqualiPrinc, " selon ", varqualiSec, sep="")) + 
-      labs(y="Count", x = varqualiPrinc, fill=varqualiSec)
+      ggtitle(paste(varqualiPrinc, " selon ", varqualiSec, sep=""))
+    if (percent){
+      res = res + labs(y="Pourcentage", x = varqualiPrinc, fill=varqualiSec)
+    }else{
+      res = res + labs(y="Count", x = varqualiPrinc, fill=varqualiSec)
+    }
     res
   }
   
@@ -576,6 +712,8 @@ server <- function(input, output){
       res = boxPlotByQuanti(dataset, input$biv_v1, input$biv_v2)
     }else if (V1_QUALI & !V2_QUALI){
       res = boxPlotByQuanti(dataset, input$biv_v2, input$biv_v1)
+    }else if (V1_QUALI & V2_QUALI){
+      res = barPlotFctQuali(dataset, input$biv_v1, input$biv_v2, stack=TRUE, percent=TRUE)
     }
     res
   })
@@ -586,10 +724,227 @@ server <- function(input, output){
   #############################
   ######## ONGLET 2 : EXPLORATION DES DONNEES
   #############################################
+  getCorrQualit = function(v1,v2){
+    force.df <- as.data.frame(matrix(NA, nrow = 3, ncol = 1))
+    rownames(force.df) = c("X2", "Phi2", "Cramer")
+    
+    # La table de contingence des profils observés
+    tab = table(v1, v2)
+    # La table de contigence s'il y a indépendence
+    tab.indep = tab
+    n = sum(tab)
+    tab.rowSum = apply(tab, 2, sum)
+    tab.colSum = apply(tab, 1, sum)
+    
+    for(i in c(1:length(tab.colSum))){
+      for(j in c(1:length(tab.rowSum))){
+        tab.indep[i,j] = tab.colSum[i]*tab.rowSum[j]/n
+      }
+    }
+    
+    # Calcul du X²
+    force.df[1,1] = sum((tab-tab.indep)^2/tab.indep)
+    # Calcul du Phi²
+    force.df[2,1] = force.df[1,1]/n
+    # Calcul du Cramer
+    force.df[3,1] = sqrt(force.df[2,1]/(min(nrow(tab), ncol(tab))-1))
+    
+    force.df
+  }
+  
+  getLeave<-reactive({
+    empattr = data.frame(pretraitement())
+    X<-split(empattr, empattr$Attrition)
+    Leave = X$Leave
+    Leave
+  })
+  getNoLeave <- reactive({
+    empattr = data.frame(pretraitement())
+    X<-split(empattr, empattr$Attrition)
+    NoLeave = X$"No Leave"
+    NoLeave
+  })
+  
+  getCorrAttrition = function(var){
+    # Calculer la variance intra classe
+    l = getLeave()[,var]
+    nl = getNoLeave()[,var]
+    num_l = length(l)
+    num_nl = length(nl)
+    moy_generale = mean(data.frame(pretraitement())[,var])
+    moy_l = mean(l)
+    moy_nl = mean(nl)
+    
+    VAR_INTERCLASSE = (num_l * (moy_l-moy_generale)^2 + num_nl * (moy_nl - moy_generale)^2)/ (num_l+num_nl)
+    VAR_INTRACLASSE = (num_l*sd(l)^2 + num_nl*sd(nl)^2)/(num_l+num_nl)
+    
+    sqrt(VAR_INTERCLASSE/VAR_INTRACLASSE)
+  }
+  output$attr_bar <- renderPlot({
+    barPlotUniv(data.frame(pretraitement()), "Attrition")
+  })
+  
+  output$attr_pie <- renderPlot({
+    piePlotUniv(pretraitement(), "Attrition")
+  })
+  
+  
+  output$attr_corr <- renderTable({
+    i=0
+    for (col in names(get_quali())){
+      if (i==0){
+        res = data.frame(t(getCorrQualit(get_quali()$Attrition, get_quali()[,col])))
+      }else{
+        res = rbind(res, t(getCorrQualit(get_quali()$Attrition, get_quali()[,col])))
+      }
+      i=i+1
+    }
+    rownames(res) <- names(get_quali())
+    res
+  }, rownames=TRUE, digits=4)
+  
+  output$attr_corr_quanti <- renderTable({
+    i=1
+    res <- as.data.frame(matrix(NA, nrow = 1, ncol = length(names(get_quanti()))-1))
+    
+    quanti_pur = get_quanti()[-12]
+    
+    for (col in names(quanti_pur)){
+      res[1,i] = getCorrAttrition(col)
+      i=i+1
+    }
+  
+    res = t(res)
+    rownames(res) = names(quanti_pur)
+    colnames(res) = "BETWEEN/WITHIN"
+    res = res[order(-res[,"BETWEEN/WITHIN"]),,drop=F]
+    res
+  }, rownames=TRUE, digits=5)
+  
+  output$attr_graphe_best_quali <- renderPlot({
+    i=0
+    for (col in names(get_quali())){
+      if (i==0){
+        res = data.frame(t(getCorrQualit(get_quali()$Attrition, get_quali()[,col])))
+      }else{
+        res = rbind(res, t(getCorrQualit(get_quali()$Attrition, get_quali()[,col])))
+      }
+      i=i+1
+    }
+    rownames(res) <- names(get_quali())
+    res = res[-6,]
+    
+    p = ggplot(data=NULL, aes(x= reorder(rownames(res), -res[,3]), y=res[,3], fill=4)) +
+      labs(y="Cramér (Correlation avec Attrition)")
+    
+    
+    
+    p + geom_bar(stat="identity") +
+      ggtitle("Barplot des variables qualitatives les plus corrélées avec Attrition") + 
+      guides(fill = FALSE)+
+      theme(axis.text.x=element_text(angle=90,hjust=1,vjust=0.5))+
+      xlab("Variables Qualitatives")
+    
+  })
+  
+  output$attr_graphe_best_quanti <- renderPlot({
+    i=1
+    res <- as.data.frame(matrix(NA, nrow = 1, ncol = length(names(get_quanti()))-1))
+    
+    quanti_pur = get_quanti()[-12]
+    
+    for (col in names(quanti_pur)){
+      res[1,i] = getCorrAttrition(col)
+      i=i+1
+    }
+    
+    res = data.frame(t(res))
+    rownames(res) = names(quanti_pur)
+    colnames(res) = "BETWEEN/WITHIN"
+    ord = order(-res[,"BETWEEN/WITHIN"])
+    res = data.frame(res[ord,])
+    ee = names(quanti_pur)[ord]
+
+    p = ggplot(data=NULL, aes(x= reorder(ee, -res[,1]), y=res[,1], fill=4)) +
+      labs(y="BETWEEN/WITHIN (Correlation avec Attrition)")
+  
+    p + geom_bar(stat="identity") +
+      ggtitle("Barplot des variables quantitatives les plus corrélées avec Attrition") + 
+      guides(fill = FALSE)+
+      theme(axis.text.x=element_text(angle=90,hjust=1,vjust=0.5))+
+      xlab("Variables Quantitatives")
+  })
+  
+  ################################## ANALYSE PAR RAPPORT A VARIABLE D INTERET
+  discAge <- reactive({
+    d = data.frame(pretraitement())
+    vv <- ifelse(d$Age<20, "1/Age<20", 
+          ifelse(d$Age >=20 & d$Age<30, "2/Age20-29",
+          ifelse(d$Age >=30 & d$Age<40, "3/Age30-39",
+          ifelse(d$Age >=40 & d$Age<50, "4/Age40-49",
+          ifelse(d$Age >=50 & d$Age<60, "5/Age50-60", "6/Age>60")))))
+    d$AgeClass = as.factor(vv)
+    d
+  })
+  
+  output$age_bar <- renderPlot({
+    dd = discAge()
+    
+    res = ggplot(data=dd, aes(x=dd[,"AgeClass"], fill=dd[,"Attrition"])) +
+      geom_bar(stat="count", position=position_fill(), alpha=0.8)
+    
+    res = res+ ggtitle("AgeClass selon Attrition")
+      res = res + labs(y="Pourcentage", x = "AgeClass", fill="Attrition")
+    res
+  })
+  
+  output$age_aggr <- DT::renderDataTable({
+    dd = discAge()
+    agg = aggregate(. ~ AgeClass + Attrition, dd, mean)
+    agg = agg[,c(1,2,3,4,5,6, 24, 26)]
+    for(i in seq(3,8))
+      agg[,i] = round(agg[,i], digits=2)
+
+    agg
+    
+  }, options = list(pageLength = 15))
+  
+  
+  discYearsAtCompany <- reactive({
+    d = data.frame(pretraitement())
+    vv <- ifelse(d$YearsAtCompany<5, "1/Ancienneté<5", 
+          ifelse(d$YearsAtCompany >=5 & d$YearsAtCompany<10, "2/Ancienneté5-10",
+          ifelse(d$YearsAtCompany >=10 & d$YearsAtCompany<20, "3/Ancienneté10-19",
+          ifelse(d$YearsAtCompany >=20 & d$YearsAtCompany<30, "4/Ancienneté20-29",
+          ifelse(d$YearsAtCompany >=30 & d$YearsAtCompany<40, "5/Ancienneté30-39", "6/Ancienneté>40")))))
+    d$AnciennClass = as.factor(vv)
+    d
+  })
+  output$comp_bar <- renderPlot({
+    dd = discYearsAtCompany()
+    
+    res = ggplot(data=dd, aes(x=dd[,"AnciennClass"], fill=dd[,"Attrition"])) +
+      geom_bar(stat="count", position=position_fill(), alpha=0.8)
+    
+    res = res+ ggtitle("AnciennClass selon Attrition")
+    res = res + labs(y="Pourcentage", x = "AnciennClass", fill="Attrition")+
+      theme(axis.text.x=element_text(angle=90,hjust=1,vjust=0.5))
+      
+    res
+  })
+  
+  output$comp_aggr <- DT::renderDataTable({
+    dd = discYearsAtCompany()
+    agg = aggregate(. ~ AnciennClass + Attrition, dd, mean)
+    agg = agg[,c(1,2,3,4,5,6, 24, 26)]
+    for(i in seq(3,8))
+      agg[,i] = round(agg[,i], digits=2)
+    
+    agg
+    
+  }, options = list(pageLength = 15))
   
 }
-
-
 
 
 # Associaion entre interface et serveur

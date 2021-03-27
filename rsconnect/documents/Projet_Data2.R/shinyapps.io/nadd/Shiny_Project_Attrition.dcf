@@ -1,0 +1,12 @@
+name: Shiny_Project_Attrition
+title: Shiny_Project_Attrition
+username:
+account: nadd
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 3870859
+bundleId: 4399854
+url: https://nadd.shinyapps.io/Shiny_Project_Attrition/
+when: 1616801841.98462
+asMultiple: FALSE
+asStatic: FALSE
